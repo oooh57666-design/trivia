@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Trivia Host</title>
+  <script type="module">
+    import { 
+      createGame,
+      listenToGame,
+      sendQuestion,
+      revealAnswers,
+      updateScores,
+      setPhase,
+      startIntermission,
+      endIntermission,
+      goToScoreboard,
+      setCategories
+    } from "./js/firestore.js";
+
+    let gameId = "";
+    let state = null;
+
+    // ----------- UI Helpers -----------
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function renderState() {
+      if (!state) return;
+
+      $("phase").innerText = state.phase;
+      $("players").innerText = Object.keys(state.players || {}).join(", ");
+      $("scores").innerText = JSON.stringify(state.scores || {}, null, 2);
+
+      // Show current question
+      $("currentQuestion").innerText = state.currentQuestion || "(none)";
+      $("correctAnswer").innerText =
+        state.currentCorrectAnswer !== null
+          ? state.currentCorrectAnswer
+          : "(none)";
+
+      // Intermission category options
+      if (state.intermission?.categories) {
+        $("intermissionCategories").innerText =
+          state.intermission.categories.join("\n");
+      }
+    }
+
+    // ----------- Create Game -----------
+    window.createHostGame = async function () {
+      gameId = $("gameIdInput").value.trim();
+      const hostName = $("hostNameInput").value.trim();
+
+      if (!gameId || !hostName) {
+        alert("Enter game ID and host name");
+        return;
+      }
+
+      await createGame(gameId, hostName);
+
+      listenToGame(gameId, (data) => {
+        state = data;
+        renderState();
+      });
+
+      alert("Game created successfully!");
+    };
+
+    // ----------- Send Question -----------
+    window.sendHostQuestion = async function () {
+      const q = $("questionInput").value.trim();
+      const answersText = $("answersInput").value.trim();
+
+      let answers = answersText.split("\n").filter((x) => x.trim().length > 0);
+
+      const correctIndex = parseInt($("correctIndexInput").value);
+
+      if (!q || answers.length < 2 || isNaN(correctIndex)) {
+        alert("Enter question, answers, and correct answer index");
+        return;
+      }
+
+      await sendQuestion(gameId, q, answers, correctIndex);
+      await setPhase(gameId, "question");
+
+      alert("Question sent to players!");
+    };
+
+    // ----------- Reveal Answers -----------
+    window.hostReveal = async function () {
+      await revealAnswers(gameId);
+    };
+
+    // ----------- Intermission -----------
+    window.hostStartIntermission = async function () {
+      const catsText = $("categoryListInput").value.trim();
+      const categories = catsText.split("\n").filter((x) => x.trim());
+
+      if (categories.length < 2) {
+        alert("Enter at least 2 categories");
+        return;
+      }
+
+      await setCategories(gameId, categories);
+      await startIntermission(gameId);
+
+      alert("Intermission started");
+    };
+
+    window.hostEndIntermission = async function () {
+      const chosen = $("chosenCategoryInput").value.trim();
+      if (!chosen) {
+        alert("Enter chosen category");
+        return;
+      }
+      await endIntermission(gameId, chosen);
+    };
+
+    // ----------- Scoreboard -----------
+    window.hostShowScoreboard = async function () {
+      await goToScoreboard(gameId);
+    };
+
+  </script>
+
+  <style>
+    body {
+      font-family: Arial;
+      margin: 20px;
+    }
+    textarea {
+      width: 300px;
+      height: 100px;
+    }
+    .box {
+      border: 1px solid #ccc;
+      padding: 15px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Trivia Host Control Panel</h1>
+
+  <!-- Game Creation -->
+  <div class="box">
+    <h2>Create Game</h2>
+
+    Game ID: <input id="gameIdInput" /><br><br>
+    Host Name: <input id="hostNameInput" /><br><br>
+
+    <button onclick="createHostGame()">Create Game</button>
+  </div>
+
+  <!-- Current State -->
+  <div class="box">
+    <h2>Game State</h2>
+    Phase: <span id="phase">(none)</span><br><br>
+    Players: <span id="players">(none)</span><br><br>
+    Scores:<pre id="scores">{}</pre><br>
+    Current Question: <span id="currentQuestion"></span><br><br>
+    Correct Answer Index: <span id="correctAnswer"></span>
+  </div>
+
+  <!-- Question Sender -->
+  <div class="box">
+    <h2>Send Question</h2>
+
+    <textarea id="questionInput" placeholder="Question"></textarea><br><br>
+
+    <textarea id="answersInput" placeholder="Each answer on new line"></textarea><br><br>
+
+    Correct answer index: <input id="correctIndexInput" placeholder="0-based" /><br><br>
+
+    <button onclick="sendHostQuestion()">Send Question</button>
+  </div>
+
+  <!-- Reveal -->
+  <div class="box">
+    <h2>Reveal</h2>
+    <button onclick="hostReveal()">Reveal Answers</button>
+  </div>
+
+  <!-- Intermission -->
+  <div class="box">
+    <h2>Intermission</h2>
+
+    <textarea id="categoryListInput" placeholder="Categories (one per line)"></textarea><br><br>
+
+    <button onclick="hostStartIntermission()">Start Intermission</button><br><br>
+
+    Chosen Category: <input id="chosenCategoryInput" /><br><br>
+    <button onclick="hostEndIntermission()">End Intermission</button>
+  </div>
+
+  <!-- Scoreboard -->
+  <div class="box">
+    <h2>Scoreboard</h2>
+    <button onclick="hostShowScoreboard()">Show Scoreboard</button>
+  </div>
+
+</body>
+</html>
