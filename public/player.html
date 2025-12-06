@@ -1,243 +1,202 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8"/>
   <title>Trivia Player</title>
-
   <script type="module">
-    import {
-      listenToGame,
-      joinGame,
-      submitAnswer,
-      submitCategoryVotes
-    } from "./js/firestore.js";
+    import { listenToGame, joinGame, submitMemoryEntry, submitAnswer, submitSuggestions, submitCategoryVotes } from "./js/firestore.js";
 
     let gameId = "";
     let playerName = "";
     let state = null;
+    let unsub = null;
 
-    function $(id) {
-      return document.getElementById(id);
-    }
+    function $ (id) { return document.getElementById(id); }
 
-    function hideAll() {
-      document.querySelectorAll(".panel").forEach((p) => {
-        p.style.display = "none";
-      });
-    }
-
-    function show(id) {
-      hideAll();
-      $(id).style.display = "block";
-    }
-
-    // ------------------- UI Renderer -------------------
     function render() {
       if (!state) return;
+      $("phase").innerText = state.phase || "(none)";
+      $("score").innerText = (state.scores && state.scores[playerName]) || 0;
 
-      const phase = state.phase;
-      $("phase").innerText = phase;
-
-      if (!state.players || !state.players[playerName]) {
-        show("joinPanel");
-        return;
-      }
-
-      $("score").innerText = state.scores?.[playerName] ?? 0;
-
-      if (phase === "lobby") {
-        show("lobbyPanel");
-      }
-
-      if (phase === "question") {
-        renderQuestion();
-        show("questionPanel");
-      }
-
-      if (phase === "reveal") {
-        renderReveal();
-        show("revealPanel");
-      }
-
-      if (phase === "intermission") {
-        renderIntermission();
-        show("intermissionPanel");
-      }
-
-      if (phase === "scoreboard") {
-        renderScoreboard();
-        show("scoreboardPanel");
-      }
-    }
-
-    // ------------------- Question -------------------
-    function renderQuestion() {
-      $("questionText").innerText = state.currentQuestion;
-
-      const container = $("answerButtons");
-      container.innerHTML = "";
-
-      (state.currentAnswers || []).forEach((ans, i) => {
-        const btn = document.createElement("button");
-        btn.innerText = ans;
-        btn.onclick = () => {
-          submitAnswer(gameId, playerName, i);
-        };
-        container.appendChild(btn);
-        container.appendChild(document.createElement("br"));
-      });
-    }
-
-    // ------------------- Reveal -------------------
-    function renderReveal() {
-      const answers = state.currentAnswers || [];
-      const correct = state.currentCorrectAnswer;
-
-      let out = "";
-      answers.forEach((ans, i) => {
-        if (i === correct) out += `✓ ${ans}\n`;
-        else out += `✗ ${ans}\n`;
-      });
-
-      $("revealText").innerText = out;
-    }
-
-    // ------------------- Intermission -------------------
-    function renderIntermission() {
-      const cats = state.intermission?.categories || [];
-
-      const container = $("voteList");
-      container.innerHTML = "";
-
-      cats.forEach((c) => {
-        const chk = document.createElement("input");
-        chk.type = "checkbox";
-        chk.value = c;
-
-        const lbl = document.createElement("label");
-        lbl.innerText = c;
-
-        container.appendChild(chk);
-        container.appendChild(lbl);
-        container.appendChild(document.createElement("br"));
-      });
-    }
-
-    window.sendVotes = async function () {
-      const selected = Array.from(
-        document.querySelectorAll("#voteList input[type=checkbox]:checked")
-      ).map((x) => x.value);
-
-      if (selected.length !== 5) {
-        alert("You must vote for exactly 5 categories");
-        return;
-      }
-
-      await submitCategoryVotes(gameId, playerName, selected);
-      alert("Votes submitted!");
-    };
-
-    // ------------------- Scoreboard -------------------
-    function renderScoreboard() {
-      const scores = state.scores || {};
-      let text = "";
-
-      Object.keys(scores)
-        .sort((a, b) => scores[b] - scores[a])
-        .forEach((p) => {
-          text += `${p}: ${scores[p]}\n`;
+      if (state.phase === "lobby") {
+        showPanel("lobby");
+      } else if (state.phase === "memory") {
+        showPanel("memory");
+        // display sequence if present
+        $("memSeqDisplay").innerText = (state.memory?.sequence || []).join(" ");
+      } else if (state.phase === "draft") {
+        showPanel("draft");
+      } else if (state.phase === "question") {
+        showPanel("question");
+        const q = state.currentQuestion || {};
+        $("qText").innerText = q.text || "";
+        // render answers as buttons
+        const ansBox = $("answerButtons");
+        ansBox.innerHTML = "";
+        (q.answers || []).forEach((a, idx) => {
+          const b = document.createElement("button");
+          b.innerText = a;
+          b.onclick = () => submitAnswer(gameId, playerName, idx);
+          ansBox.appendChild(b);
+          ansBox.appendChild(document.createElement("br"));
         });
-
-      $("scoreboardText").innerText = text;
+        // if you are main and must choose sub, show selection
+        if (q.main === playerName && (!q.sub)) {
+          // list peers
+          const peers = Object.keys(state.players || {}).filter(p => p !== playerName);
+          const sel = $("subSelect");
+          sel.innerHTML = "";
+          const select = document.createElement("select");
+          peers.forEach(pp => {
+            const opt = document.createElement("option");
+            opt.value = pp; opt.innerText = pp;
+            select.appendChild(opt);
+          });
+          const btn = document.createElement("button");
+          btn.innerText = "Choose sub";
+          btn.onclick = async () => {
+            const chosen = select.value;
+            // using update directly to currentQuestion.sub path
+            const { updateCurrentSub } = await import("./js/extra_helpers.js").catch(()=>({}));
+            if (typeof updateCurrentSub === "function") {
+              await updateCurrentSub(gameId, chosen);
+            } else {
+              alert("Host-only or helper not available.");
+            }
+          };
+          sel.appendChild(select); sel.appendChild(document.createElement("br")); sel.appendChild(btn);
+        }
+      } else if (state.phase === "reveal") {
+        showPanel("reveal");
+        const q = state.currentQuestion || {};
+        const answers = state.currentAnswers || [];
+        const correct = state.currentCorrectAnswer;
+        let out = "";
+        (answers || []).forEach((a, idx) => {
+          out += (idx === correct ? "✓ " : "✗ ") + (a || "") + "\n";
+        });
+        $("revealText").innerText = out;
+      } else if (state.phase === "intermission") {
+        showPanel("intermission");
+        // show pooled categories
+        const cats = state.intermission?.categories || [];
+        const pool = $("interPool");
+        pool.innerHTML = "";
+        cats.forEach(c=>{
+          const cb = document.createElement("input");
+          cb.type = "checkbox"; cb.value = c;
+          pool.appendChild(cb);
+          const lbl = document.createElement("label"); lbl.innerText = c;
+          pool.appendChild(lbl); pool.appendChild(document.createElement("br"));
+        });
+      } else if (state.phase === "scoreboard") {
+        showPanel("scoreboard");
+        const sc = state.scores || {};
+        let out = "";
+        Object.keys(sc).sort((a,b)=> sc[b]-sc[a]).forEach(p => out += `${p}: ${sc[p]}\n`);
+        $("scoreboardText").innerText = out;
+      }
     }
 
-    // ------------------- Join -------------------
-    window.join = async function () {
+    function showPanel(name) {
+      document.querySelectorAll(".panel").forEach(p=>p.style.display="none");
+      document.getElementById(name).style.display = "block";
+    }
+
+    window.join = async function() {
       gameId = $("gameIdInput").value.trim();
       playerName = $("playerNameInput").value.trim();
-
-      if (!gameId || !playerName) {
-        alert("Enter game ID and name.");
-        return;
-      }
-
+      if (!gameId || !playerName) { alert("Enter values"); return; }
       await joinGame(gameId, playerName);
-
-      listenToGame(gameId, (data) => {
-        state = data;
-        render();
-      });
-
-      show("lobbyPanel");
+      unsub = listenToGame(gameId, (data)=>{ state = data; render(); });
+      showPanel("lobby");
     };
+
+    window.submitMem = async function() {
+      const entries = [];
+      for (let i=1;i<=parseInt($("memUnits").value||10);i++) {
+        const v = document.getElementById("memUnit"+i).value.trim();
+        if (v) entries.push(v);
+      }
+      await submitMemoryEntry(gameId, playerName, entries);
+      alert("Memory entry submitted.");
+    };
+
+    window.sendSuggestions = async function() {
+      const t = $("mySuggestions").value.trim().split("\n").map(s=>s.trim()).filter(Boolean);
+      await submitSuggestions(gameId, playerName, t);
+      alert("Suggestions saved.");
+    };
+
+    window.sendVotes = async function() {
+      const checked = Array.from(document.querySelectorAll("#interPool input[type=checkbox]:checked")).map(x=>x.value);
+      if (checked.length !== 5) { alert("Pick exactly 5"); return; }
+      await submitCategoryVotes(gameId, playerName, checked);
+      alert("Votes submitted.");
+    };
+
   </script>
 
   <style>
-    body {
-      font-family: Arial;
-      margin: 20px;
-    }
-    .panel {
-      display: none;
-    }
-    button {
-      margin-top: 6px;
-    }
-    pre {
-      font-size: 18px;
-    }
+    body { font-family: Arial; margin: 16px; }
+    .panel { display: none; }
+    .col { display:inline-block; vertical-align:top; margin-right:12px; }
+    button { margin-top:8px; padding:6px 10px; }
   </style>
 </head>
-
 <body>
-  <h1>Trivia Player</h1>
+  <h1>Trivia — Player</h1>
+  Phase: <span id="phase"></span><br/>
+  Score: <span id="score">0</span>
 
-  <p>Phase: <span id="phase"></span></p>
-  <p>Your Score: <span id="score">0</span></p>
-
-  <!-- Join -->
-  <div id="joinPanel" class="panel">
-    <h2>Join Game</h2>
-
-    Game ID: <input id="gameIdInput"><br><br>
-    Your Name: <input id="playerNameInput"><br><br>
-
-    <button onclick="join()">Join</button>
+  <div id="lobby" class="panel">
+    <h2>Join</h2>
+    Game ID: <input id="gameIdInput" /><br/>
+    Your name: <input id="playerNameInput" /><br/>
+    <button onclick="join()">Join Game</button>
   </div>
 
-  <!-- Lobby -->
-  <div id="lobbyPanel" class="panel">
-    <h2>Waiting for host...</h2>
+  <div id="memory" class="panel">
+    <h2>Memory Round</h2>
+    <div>Sequence (will be shown by host): <pre id="memSeqDisplay"></pre></div>
+    <div>
+      <h4>Enter your sequence (one input per unit)</h4>
+      Units: <input id="memUnits" type="number" value="10" style="width:80px"/><br/>
+      <div id="memInputs"></div>
+      <button onclick="(function(){ const u=parseInt(document.getElementById('memUnits').value||10); const parent=document.getElementById('memInputs'); parent.innerHTML=''; for(let i=1;i<=u;i++){ const input=document.createElement('input'); input.id='memUnit'+i; input.placeholder='unit '+i; parent.appendChild(input); parent.appendChild(document.createElement('br')); } })()">Build inputs</button>
+      <button onclick="submitMem()">Submit memory entry</button>
+    </div>
   </div>
 
-  <!-- Question -->
-  <div id="questionPanel" class="panel">
-    <h2 id="questionText"></h2>
+  <div id="draft" class="panel">
+    <h2>Draft stage (waiting for host/draft picks)</h2>
+    <div id="draftInfo"></div>
+  </div>
 
+  <div id="question" class="panel">
+    <h2 id="qText"></h2>
     <div id="answerButtons"></div>
+    <div id="subSelect"></div>
   </div>
 
-  <!-- Reveal -->
-  <div id="revealPanel" class="panel">
+  <div id="reveal" class="panel">
     <h2>Reveal</h2>
-
     <pre id="revealText"></pre>
   </div>
 
-  <!-- Intermission -->
-  <div id="intermissionPanel" class="panel">
-    <h2>Intermission — Vote for 5 categories</h2>
-
-    <div id="voteList"></div><br>
-    <button onclick="sendVotes()">Submit Votes</button>
+  <div id="intermission" class="panel">
+    <h2>Intermission</h2>
+    <h4>Suggest up to 5 categories</h4>
+    <textarea id="mySuggestions" style="width:360px;height:90px"></textarea><br/>
+    <button onclick="sendSuggestions()">Submit suggestions</button>
+    <h4>Vote on pooled list (select exactly 5)</h4>
+    <div id="interPool"></div>
+    <button onclick="sendVotes()">Submit votes</button>
   </div>
 
-  <!-- Scoreboard -->
-  <div id="scoreboardPanel" class="panel">
+  <div id="scoreboard" class="panel">
     <h2>Scoreboard</h2>
-
     <pre id="scoreboardText"></pre>
   </div>
-
 </body>
 </html>
