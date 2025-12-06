@@ -1,205 +1,240 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>Trivia Host</title>
+  <meta charset="utf-8"/>
+  <title>Trivia Host — Control Panel</title>
   <script type="module">
-    import { 
-      createGame,
-      listenToGame,
-      sendQuestion,
-      revealAnswers,
-      updateScores,
-      setPhase,
-      startIntermission,
-      endIntermission,
-      goToScoreboard,
-      setCategories
+    import {
+      createGame, listenToGame, generateMemorySequence, submitMemoryEntry,
+      finalizeMemoryRound, pickCategory, hostSubmitQuestion, setSubForCurrent,
+      submitAnswer, computeAndApplyScoring, submitSuggestions, submitCategoryVotes,
+      finalizeIntermission, setPhase, goToScoreboard, joinGame
     } from "./js/firestore.js";
 
     let gameId = "";
+    let hostName = "";
     let state = null;
+    let unsub = null;
 
-    // ----------- UI Helpers -----------
-    function $(id) {
-      return document.getElementById(id);
-    }
+    function $ (id) { return document.getElementById(id); }
 
-    function renderState() {
+    function render() {
       if (!state) return;
-
-      $("phase").innerText = state.phase;
+      $("phase").innerText = state.phase || "(none)";
       $("players").innerText = Object.keys(state.players || {}).join(", ");
-      $("scores").innerText = JSON.stringify(state.scores || {}, null, 2);
+      $("scores").value = JSON.stringify(state.scores || {}, null, 2);
 
-      // Show current question
-      $("currentQuestion").innerText = state.currentQuestion || "(none)";
-      $("correctAnswer").innerText =
-        state.currentCorrectAnswer !== null
-          ? state.currentCorrectAnswer
-          : "(none)";
+      // memory
+      $("memorySeq").value = (state.memory?.sequence || []).join(" ");
+      // draft
+      $("draftOrder").value = (state.draft?.order || []).join(", ");
+      $("draftPicks").value = JSON.stringify(state.draft?.picks || {}, null, 2);
+      // categories
+      $("round1Cats").value = (state.categories?.round1 || []).join("\n");
+      $("round2Pool").value = (state.categories?.round2 || []).join("\n");
 
-      // Intermission category options
-      if (state.intermission?.categories) {
-        $("intermissionCategories").innerText =
-          state.intermission.categories.join("\n");
+      // current question
+      const q = state.currentQuestion;
+      if (q) {
+        $("currentQText").innerText = q.text;
+        $("currentQMain").innerText = q.main || "(none)";
+        $("currentQSub").innerText = q.sub || "(none)";
+        $("currentQValue").innerText = q.value || "(none)";
+      } else {
+        $("currentQText").innerText = "(none)";
+        $("currentQMain").innerText = "(none)";
+        $("currentQSub").innerText = "(none)";
+        $("currentQValue").innerText = "(none)";
       }
     }
 
-    // ----------- Create Game -----------
-    window.createHostGame = async function () {
+    async function doCreate() {
       gameId = $("gameIdInput").value.trim();
-      const hostName = $("hostNameInput").value.trim();
-
-      if (!gameId || !hostName) {
-        alert("Enter game ID and host name");
-        return;
-      }
-
+      hostName = $("hostNameInput").value.trim();
+      if (!gameId || !hostName) { alert("Enter id + host name"); return; }
       await createGame(gameId, hostName);
+      // auto join host as player
+      await joinGame(gameId, hostName);
+      unsub = listenToGame(gameId, (data) => { state = data; render(); });
+      alert("Game created. Players can now join.");
+    }
 
-      listenToGame(gameId, (data) => {
-        state = data;
-        renderState();
-      });
+    window.create = doCreate;
 
-      alert("Game created successfully!");
-    };
-
-    // ----------- Send Question -----------
-    window.sendHostQuestion = async function () {
-      const q = $("questionInput").value.trim();
-      const answersText = $("answersInput").value.trim();
-
-      let answers = answersText.split("\n").filter((x) => x.trim().length > 0);
-
-      const correctIndex = parseInt($("correctIndexInput").value);
-
-      if (!q || answers.length < 2 || isNaN(correctIndex)) {
-        alert("Enter question, answers, and correct answer index");
-        return;
+    // Memory sequence generator
+    window.generateMemory = async function() {
+      gameId = $("gameIdInput").value.trim();
+      if (!gameId) { alert("Game ID required"); return; }
+      const units = parseInt($("memUnits").value) || 10;
+      const type = $("memType").value;
+      const arr = [];
+      if (type === "Numbers") {
+        for (let i=0;i<units;i++) arr.push(String(Math.floor(Math.random()*10)));
+      } else {
+        const pool = ["apple","cloud","star","triangle","circle","dog","cat","tree","sun","moon","book","car"];
+        for (let i=0;i<units;i++) arr.push(pool[Math.floor(Math.random()*pool.length)]);
       }
-
-      await sendQuestion(gameId, q, answers, correctIndex);
-      await setPhase(gameId, "question");
-
-      alert("Question sent to players!");
+      await generateMemorySequence(gameId, arr);
+      alert("Sequence generated and memory round started.");
     };
 
-    // ----------- Reveal Answers -----------
-    window.hostReveal = async function () {
-      await revealAnswers(gameId);
+    window.finalizeMemory = async function() {
+      const gid = $("gameIdInput").value.trim();
+      const winner = await finalizeMemoryRound(gid);
+      alert("Memory round finished. Winner: " + (winner || "none"));
     };
 
-    // ----------- Intermission -----------
-    window.hostStartIntermission = async function () {
-      const catsText = $("categoryListInput").value.trim();
-      const categories = catsText.split("\n").filter((x) => x.trim());
-
-      if (categories.length < 2) {
-        alert("Enter at least 2 categories");
-        return;
-      }
-
-      await setCategories(gameId, categories);
-      await startIntermission(gameId);
-
-      alert("Intermission started");
+    // Draft pick
+    window.pickFor = async function() {
+      const gid = $("gameIdInput").value.trim();
+      const pname = $("pickPlayer").value.trim();
+      const cat = $("pickCategoryFor").value.trim();
+      if (!gid || !pname || !cat) { alert("Enter game, player, category"); return; }
+      try {
+        await pickCategory(gid, pname, cat);
+        alert("Pick recorded.");
+      } catch (e) { alert("Pick failed: " + e); }
     };
 
-    window.hostEndIntermission = async function () {
-      const chosen = $("chosenCategoryInput").value.trim();
-      if (!chosen) {
-        alert("Enter chosen category");
-        return;
-      }
-      await endIntermission(gameId, chosen);
+    // Host submit question
+    window.hostSendQuestion = async function() {
+      const gid = $("gameIdInput").value.trim();
+      const q = $("questionText").value.trim();
+      const answers = $("answersText").value.trim().split("\n").map(s=>s.trim()).filter(s=>s);
+      const correctIndex = parseInt($("correctIndex").value);
+      const value = parseInt($("qValue").value) || 100;
+      const main = $("mainPlayer").value.trim() || null;
+      if (!gid || !q || answers.length < 2 || isNaN(correctIndex)) { alert("Bad question or missing fields"); return; }
+      await hostSubmitQuestion(gid, q, answers, correctIndex, value, main);
+      alert("Question posted.");
     };
 
-    // ----------- Scoreboard -----------
-    window.hostShowScoreboard = async function () {
-      await goToScoreboard(gameId);
+    // Set sub
+    window.setSub = async function () {
+      const gid = $("gameIdInput").value.trim();
+      const sub = $("subPlayer").value.trim();
+      if (!gid || !sub) { alert("Enter game & sub"); return; }
+      await setSubForCurrent(gid, sub);
+      alert("Sub set.");
+    };
+
+    // Force compute scoring (host)
+    window.applyScoring = async function() {
+      const gid = $("gameIdInput").value.trim();
+      await computeAndApplyScoring(gid);
+      alert("Scoring computed and applied.");
+    };
+
+    // Intermission helpers: submit suggestions (host can seed)
+    window.submitSuggestionHost = async function() {
+      const gid = $("gameIdInput").value.trim();
+      const player = $("hostNameInput").value.trim();
+      const txt = $("hostSuggestions").value.trim().split("\n").filter(s=>s);
+      if (!gid || !player) { alert("Enter game+host"); return; }
+      await submitSuggestions(gid, player, txt);
+      alert("Suggestions stored.");
+    };
+
+    window.finalizeIntermissionHost = async function() {
+      const gid = $("gameIdInput").value.trim();
+      await finalizeIntermission(gid);
+      alert("Intermission finalized; round2 pool set.");
+    };
+
+    window.showScoreboard = async function() {
+      const gid = $("gameIdInput").value.trim();
+      await goToScoreboard(gid);
     };
 
   </script>
 
   <style>
-    body {
-      font-family: Arial;
-      margin: 20px;
-    }
-    textarea {
-      width: 300px;
-      height: 100px;
-    }
-    .box {
-      border: 1px solid #ccc;
-      padding: 15px;
-      margin-bottom: 20px;
-    }
+    body { font-family: Arial; margin: 14px; }
+    .col { display:inline-block; vertical-align:top; margin-right:18px; }
+    textarea{ width: 360px; height:100px; }
+    pre { background:#f3f4f6; padding:8px; border-radius:6px; }
+    .small { font-size:13px; color:#444; }
+    input[type=text],select { padding:6px; width:300px; }
+    button { margin-top:8px; padding:8px 12px; }
   </style>
 </head>
-
 <body>
-
-  <h1>Trivia Host Control Panel</h1>
-
-  <!-- Game Creation -->
-  <div class="box">
-    <h2>Create Game</h2>
-
-    Game ID: <input id="gameIdInput" /><br><br>
-    Host Name: <input id="hostNameInput" /><br><br>
-
-    <button onclick="createHostGame()">Create Game</button>
+  <h1>Host console</h1>
+  <div style="margin-bottom:12px;">
+    Game ID: <input id="gameIdInput" type="text"/> &nbsp;
+    Host name: <input id="hostNameInput" type="text" />
+    <button onclick="create()">Create & Join</button>
+    <span class="small"> (create initializes game & sets host as a player)</span>
   </div>
 
-  <!-- Current State -->
-  <div class="box">
-    <h2>Game State</h2>
-    Phase: <span id="phase">(none)</span><br><br>
-    Players: <span id="players">(none)</span><br><br>
-    Scores:<pre id="scores">{}</pre><br>
-    Current Question: <span id="currentQuestion"></span><br><br>
-    Correct Answer Index: <span id="correctAnswer"></span>
+  <div style="display:flex; gap:18px;">
+    <div class="col">
+      <h3>State</h3>
+      Phase: <b id="phase">(none)</b><br/>
+      Players: <div id="players" class="small"></div>
+      <h4>Scores</h4>
+      <textarea id="scores" readonly></textarea>
+      <h4>Draft</h4>
+      Order: <textarea id="draftOrder" readonly style="height:40px"></textarea>
+      Picks: <textarea id="draftPicks" readonly style="height:80px"></textarea>
+    </div>
+
+    <div class="col">
+      <h3>Memory Game</h3>
+      Type: <select id="memType"><option>Numbers</option><option>Words</option></select><br/>
+      Units: <input id="memUnits" type="number" value="10" style="width:80px"/><br/>
+      <button onclick="generateMemory()">Generate & Start Memory Round</button><br/>
+      Sequence: <textarea id="memorySeq" readonly style="height:50px"></textarea><br/>
+      <button onclick="finalizeMemory()">Finalize Memory Round (determine winner & set draft)</button>
+    </div>
+
+    <div class="col">
+      <h3>Draft / Categories</h3>
+      Round1 categories (host-edit):<br/>
+      <textarea id="round1Cats" placeholder="one per line" style="height:120px"></textarea><br/>
+      <button onclick="document.getElementById('round1Cats').value && (async ()=>{ const cats = document.getElementById('round1Cats').value.split('\\n').map(s=>s.trim()).filter(Boolean); await (await import('./js/firestore.js')).setCategories(document.getElementById('gameIdInput').value.trim(), cats); alert('Round1 categories saved'); })()">Save Round1 Categories</button>
+      <h4>Manual pick (host)</h4>
+      Player: <input id="pickPlayer" type="text" placeholder="player name"/><br/>
+      Category: <input id="pickCategoryFor" type="text" placeholder="category"/><br/>
+      <button onclick="pickFor()">Record pick</button>
+    </div>
   </div>
 
-  <!-- Question Sender -->
-  <div class="box">
-    <h2>Send Question</h2>
+  <hr/>
 
-    <textarea id="questionInput" placeholder="Question"></textarea><br><br>
+  <h3>Question / Reveal</h3>
+  <div style="display:flex; gap:18px;">
+    <div class="col">
+      Question text:<br/><textarea id="questionText"></textarea><br/>
+      Answers (one per line):<br/><textarea id="answersText"></textarea><br/>
+      Correct index (0-based): <input id="correctIndex" style="width:60px"/><br/>
+      Value: <input id="qValue" type="number" value="100" style="width:100px"/><br/>
+      Main player (optional): <input id="mainPlayer" /><br/>
+      <button onclick="hostSendQuestion()">Send question</button>
+    </div>
 
-    <textarea id="answersInput" placeholder="Each answer on new line"></textarea><br><br>
+    <div class="col">
+      Current Q: <div id="currentQText" class="small"></div>
+      Main: <div id="currentQMain" class="small"></div>
+      Sub: <div id="currentQSub" class="small"></div>
+      Value: <div id="currentQValue" class="small"></div>
 
-    Correct answer index: <input id="correctIndexInput" placeholder="0-based" /><br><br>
+      <h4>Set Sub</h4>
+      Sub player name: <input id="subPlayer" />
+      <button onclick="setSub()">Set Sub</button>
 
-    <button onclick="sendHostQuestion()">Send Question</button>
+      <h4>Scoring</h4>
+      <button onclick="applyScoring()">Compute & Apply Scoring</button>
+    </div>
   </div>
 
-  <!-- Reveal -->
-  <div class="box">
-    <h2>Reveal</h2>
-    <button onclick="hostReveal()">Reveal Answers</button>
-  </div>
-
-  <!-- Intermission -->
-  <div class="box">
-    <h2>Intermission</h2>
-
-    <textarea id="categoryListInput" placeholder="Categories (one per line)"></textarea><br><br>
-
-    <button onclick="hostStartIntermission()">Start Intermission</button><br><br>
-
-    Chosen Category: <input id="chosenCategoryInput" /><br><br>
-    <button onclick="hostEndIntermission()">End Intermission</button>
-  </div>
-
-  <!-- Scoreboard -->
-  <div class="box">
-    <h2>Scoreboard</h2>
-    <button onclick="hostShowScoreboard()">Show Scoreboard</button>
-  </div>
+  <hr/>
+  <h3>Intermission</h3>
+  Host suggestions (one per line):<br/>
+  <textarea id="hostSuggestions" style="height:80px"></textarea><br/>
+  <button onclick="submitSuggestionHost()">Submit Host Suggestions</button>
+  <button onclick="finalizeIntermissionHost()">Finalize intermission & build Round2 pool</button>
+  <button onclick="showScoreboard()">Show Scoreboard</button>
 
 </body>
 </html>
