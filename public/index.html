@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Trivia Game — Join or Host</title>
+
+  <!-- Basic styling (you can replace with /css/style.css later) -->
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --muted: #6b7280;
+      --brand: #2563eb;
+      --radius: 10px;
+    }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin:0; background:var(--bg); color:#111;}
+    .wrap { max-width: 1000px; margin:48px auto; padding:24px; background:var(--card); border-radius:var(--radius); box-shadow:0 6px 30px rgba(20,20,40,0.06); }
+    h1 { margin:0 0 6px 0; font-size:28px; }
+    p.lead { margin:0 0 18px 0; color:var(--muted); }
+    .row { display:flex; gap:16px; margin-top:18px; flex-wrap:wrap; }
+    .card { flex:1; min-width:280px; padding:18px; border-radius:8px; background:#f7f9fc; box-sizing:border-box; }
+    label { display:block; margin-bottom:8px; font-weight:600; color:#222; }
+    input[type=text], input[type=number] { width:100%; padding:10px 12px; border:1px solid #e6eefb; border-radius:6px; box-sizing:border-box; }
+    button { background:var(--brand); color:white; border:0; padding:10px 14px; border-radius:6px; cursor:pointer; }
+    button.secondary { background:#6b7280; }
+    small.help { color:var(--muted); display:block; margin-top:6px; }
+    .footer { margin-top:18px; color:var(--muted); font-size:13px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    .inline { display:inline-flex; gap:8px; align-items:center; }
+    code { background:#f1f5f9; padding:2px 6px; border-radius:4px; font-size:13px; }
+  </style>
+
+  <!-- Placeholder: the firebase modules will be loaded in /js/firebaseConfig.js -->
+  <!-- We will add real Firebase initialization in the next file. -->
+</head>
+<body>
+  <div class="wrap" role="main" aria-labelledby="title">
+    <h1 id="title">Trivia Game</h1>
+    <p class="lead">Create or join a live trivia room. Host controls the game and players join from their devices. Everything runs in real-time using Firebase Firestore.</p>
+
+    <div class="row" role="region" aria-label="Create or Join">
+      <div class="card" role="article" aria-labelledby="create-title">
+        <h3 id="create-title">Create a new game (Host)</h3>
+        <label for="hostName">Your name</label>
+        <input id="hostName" type="text" placeholder="e.g. Alex" autocomplete="name" />
+        <label for="newGameId" style="margin-top:10px">Optional game id (leave blank for auto)</label>
+        <input id="newGameId" type="text" placeholder="optional: friendly-game-id" />
+        <div style="margin-top:12px;">
+          <button id="createBtn">Create Game</button>
+          <small class="help">After creating, you'll be taken to the host console.</small>
+        </div>
+      </div>
+
+      <div class="card" role="article" aria-labelledby="join-title">
+        <h3 id="join-title">Join an existing game (Player)</h3>
+        <label for="playerName">Your name</label>
+        <input id="playerName" type="text" placeholder="e.g. Maya" autocomplete="name" />
+        <label for="joinGameId" style="margin-top:10px">Game id</label>
+        <input id="joinGameId" type="text" placeholder="Enter game id" />
+        <div style="margin-top:12px;">
+          <button id="joinBtn" class="secondary">Join Game</button>
+          <small class="help">Ask the host for the game id, or join a public room.</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer" role="contentinfo">
+      <div style="flex:1; min-width:240px;">
+        <strong>Note:</strong> This app will write/read game state to Firestore under <code>games/{'{gameId}'}</code>. Make sure your Firebase rules allow that path (we covered the simple rule earlier).
+      </div>
+      <div style="min-width:200px; text-align:right;">
+        <button id="learnMore" class="secondary">How this works</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Minimal client bootstrap script -->
+  <script type="module">
+    // Helper: friendly id (alphanumeric)
+    const randomId = (len=6) => {
+      const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+      let s = "";
+      for (let i=0;i<len;i++) s += chars[Math.floor(Math.random()*chars.length)];
+      return s;
+    };
+
+    const createBtn = document.getElementById("createBtn");
+    const joinBtn = document.getElementById("joinBtn");
+    const learnMore = document.getElementById("learnMore");
+
+    createBtn.addEventListener("click", (e) => {
+      const hostName = document.getElementById("hostName").value.trim();
+      const provided = document.getElementById("newGameId").value.trim();
+      if (!hostName) { alert("Please enter your name"); return; }
+      const gid = provided || ("game-" + randomId(5));
+      // Redirect to host console; host page will write initial game doc
+      const url = `/host.html?game=${encodeURIComponent(gid)}&name=${encodeURIComponent(hostName)}`;
+      window.location.href = url;
+    });
+
+    joinBtn.addEventListener("click", (e) => {
+      const playerName = document.getElementById("playerName").value.trim();
+      const gid = document.getElementById("joinGameId").value.trim();
+      if (!playerName) { alert("Please enter your name"); return; }
+      if (!gid) { alert("Please enter a game id"); return; }
+      const url = `/player.html?game=${encodeURIComponent(gid)}&name=${encodeURIComponent(playerName)}`;
+      window.location.href = url;
+    });
+
+    learnMore.addEventListener("click", () => {
+      alert("Flow: create game -> host console -> players join -> host starts memory/rounds -> intermission voting -> round 2 -> final scoreboard. All real-time via Firestore.");
+    });
+  </script>
+</body>
+</html>
