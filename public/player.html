@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Trivia Player</title>
+
+  <script type="module">
+    import {
+      listenToGame,
+      joinGame,
+      submitAnswer,
+      submitCategoryVotes
+    } from "./js/firestore.js";
+
+    let gameId = "";
+    let playerName = "";
+    let state = null;
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function hideAll() {
+      document.querySelectorAll(".panel").forEach((p) => {
+        p.style.display = "none";
+      });
+    }
+
+    function show(id) {
+      hideAll();
+      $(id).style.display = "block";
+    }
+
+    // ------------------- UI Renderer -------------------
+    function render() {
+      if (!state) return;
+
+      const phase = state.phase;
+      $("phase").innerText = phase;
+
+      if (!state.players || !state.players[playerName]) {
+        show("joinPanel");
+        return;
+      }
+
+      $("score").innerText = state.scores?.[playerName] ?? 0;
+
+      if (phase === "lobby") {
+        show("lobbyPanel");
+      }
+
+      if (phase === "question") {
+        renderQuestion();
+        show("questionPanel");
+      }
+
+      if (phase === "reveal") {
+        renderReveal();
+        show("revealPanel");
+      }
+
+      if (phase === "intermission") {
+        renderIntermission();
+        show("intermissionPanel");
+      }
+
+      if (phase === "scoreboard") {
+        renderScoreboard();
+        show("scoreboardPanel");
+      }
+    }
+
+    // ------------------- Question -------------------
+    function renderQuestion() {
+      $("questionText").innerText = state.currentQuestion;
+
+      const container = $("answerButtons");
+      container.innerHTML = "";
+
+      (state.currentAnswers || []).forEach((ans, i) => {
+        const btn = document.createElement("button");
+        btn.innerText = ans;
+        btn.onclick = () => {
+          submitAnswer(gameId, playerName, i);
+        };
+        container.appendChild(btn);
+        container.appendChild(document.createElement("br"));
+      });
+    }
+
+    // ------------------- Reveal -------------------
+    function renderReveal() {
+      const answers = state.currentAnswers || [];
+      const correct = state.currentCorrectAnswer;
+
+      let out = "";
+      answers.forEach((ans, i) => {
+        if (i === correct) out += `✓ ${ans}\n`;
+        else out += `✗ ${ans}\n`;
+      });
+
+      $("revealText").innerText = out;
+    }
+
+    // ------------------- Intermission -------------------
+    function renderIntermission() {
+      const cats = state.intermission?.categories || [];
+
+      const container = $("voteList");
+      container.innerHTML = "";
+
+      cats.forEach((c) => {
+        const chk = document.createElement("input");
+        chk.type = "checkbox";
+        chk.value = c;
+
+        const lbl = document.createElement("label");
+        lbl.innerText = c;
+
+        container.appendChild(chk);
+        container.appendChild(lbl);
+        container.appendChild(document.createElement("br"));
+      });
+    }
+
+    window.sendVotes = async function () {
+      const selected = Array.from(
+        document.querySelectorAll("#voteList input[type=checkbox]:checked")
+      ).map((x) => x.value);
+
+      if (selected.length !== 5) {
+        alert("You must vote for exactly 5 categories");
+        return;
+      }
+
+      await submitCategoryVotes(gameId, playerName, selected);
+      alert("Votes submitted!");
+    };
+
+    // ------------------- Scoreboard -------------------
+    function renderScoreboard() {
+      const scores = state.scores || {};
+      let text = "";
+
+      Object.keys(scores)
+        .sort((a, b) => scores[b] - scores[a])
+        .forEach((p) => {
+          text += `${p}: ${scores[p]}\n`;
+        });
+
+      $("scoreboardText").innerText = text;
+    }
+
+    // ------------------- Join -------------------
+    window.join = async function () {
+      gameId = $("gameIdInput").value.trim();
+      playerName = $("playerNameInput").value.trim();
+
+      if (!gameId || !playerName) {
+        alert("Enter game ID and name.");
+        return;
+      }
+
+      await joinGame(gameId, playerName);
+
+      listenToGame(gameId, (data) => {
+        state = data;
+        render();
+      });
+
+      show("lobbyPanel");
+    };
+  </script>
+
+  <style>
+    body {
+      font-family: Arial;
+      margin: 20px;
+    }
+    .panel {
+      display: none;
+    }
+    button {
+      margin-top: 6px;
+    }
+    pre {
+      font-size: 18px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Trivia Player</h1>
+
+  <p>Phase: <span id="phase"></span></p>
+  <p>Your Score: <span id="score">0</span></p>
+
+  <!-- Join -->
+  <div id="joinPanel" class="panel">
+    <h2>Join Game</h2>
+
+    Game ID: <input id="gameIdInput"><br><br>
+    Your Name: <input id="playerNameInput"><br><br>
+
+    <button onclick="join()">Join</button>
+  </div>
+
+  <!-- Lobby -->
+  <div id="lobbyPanel" class="panel">
+    <h2>Waiting for host...</h2>
+  </div>
+
+  <!-- Question -->
+  <div id="questionPanel" class="panel">
+    <h2 id="questionText"></h2>
+
+    <div id="answerButtons"></div>
+  </div>
+
+  <!-- Reveal -->
+  <div id="revealPanel" class="panel">
+    <h2>Reveal</h2>
+
+    <pre id="revealText"></pre>
+  </div>
+
+  <!-- Intermission -->
+  <div id="intermissionPanel" class="panel">
+    <h2>Intermission — Vote for 5 categories</h2>
+
+    <div id="voteList"></div><br>
+    <button onclick="sendVotes()">Submit Votes</button>
+  </div>
+
+  <!-- Scoreboard -->
+  <div id="scoreboardPanel" class="panel">
+    <h2>Scoreboard</h2>
+
+    <pre id="scoreboardText"></pre>
+  </div>
+
+</body>
+</html>
